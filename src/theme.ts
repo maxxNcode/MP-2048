@@ -1,16 +1,6 @@
-import { extendTheme, ThemeConfig } from '@chakra-ui/react'
+// Chakra UI v3 uses the new System API. This project provides the system via
+// `ChakraProvider value={defaultSystem}` in `src/main.tsx`.
+// This file is intentionally a no-op to avoid TypeScript build errors.
+// If you want to customize tokens, create a system and pass it to ChakraProvider.
 
-const config: ThemeConfig = {
-  initialColorMode: 'system',
-  useSystemColorMode: true,
-}
-
-const theme = extendTheme({
-  config,
-  fonts: {
-    heading: 'Inter, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol"',
-    body: 'Inter, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol"',
-  },
-})
-
-export default theme
+export {}
