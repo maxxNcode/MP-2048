@@ -201,6 +201,8 @@ export default function GamePage() {
         // sounds: tick on move, blip on merge
         playTone(220, 80, 'triangle')
         if (next.gain > 0) playTone(440, 120, 'sawtooth')
+        // haptics
+        try { (navigator as any).vibrate?.(10) } catch {}
         // check game over after applying move
         if (!canMoveAny(next.board)) {
           const score = scoreOfBoard(next.board)
@@ -225,6 +227,7 @@ export default function GamePage() {
     if (!roomId || !profile || !myTurn) return
     const { error } = await supabase.rpc('make_move', { p_room_id: roomId, p_user_id: profile.id, p_direction: dir })
     if (error) { addToast({ type: 'error', title: 'Move failed', message: error.message }); return }
+    try { (navigator as any).vibrate?.(10) } catch {}
     // Optimistically fetch the latest room state so mover sees update immediately
     const { data: updated, error: fetchErr } = await supabase
       .from('multiplayer_rooms')
@@ -241,6 +244,10 @@ export default function GamePage() {
   const onTouchStart: TouchEventHandler<HTMLDivElement> = (e) => {
     const t = e.changedTouches[0]
     touchStartRef.current = { x: t.clientX, y: t.clientY }
+  }
+  const onTouchMove: TouchEventHandler<HTMLDivElement> = (e) => {
+    // Prevent the page from scrolling while swiping the board
+    if (touchStartRef.current) e.preventDefault()
   }
   const onTouchEnd: TouchEventHandler<HTMLDivElement> = (e) => {
     if (!touchStartRef.current) return
@@ -338,7 +345,7 @@ export default function GamePage() {
           Combine tiles with the same number to add them together. Try to reach 2048! Use Arrow keys / WASD or swipe. Press New Game anytime.
         </div>
       )}
-      <div ref={containerRef} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} className="grid md:grid-cols-[1fr,300px] gap-4 items-start">
+      <div ref={containerRef} onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd} style={{ touchAction: 'none' }} className="grid md:grid-cols-[1fr,300px] gap-4 items-start">
         <div className="order-1 md:order-none">
           <div className="flex items-center justify-between mb-3">
           <TurnIndicator status={isSingle ? 'your_turn' : myTurn ? 'your_turn' : 'opponent_turn'} />

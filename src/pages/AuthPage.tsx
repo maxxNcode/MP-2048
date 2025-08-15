@@ -1,13 +1,20 @@
-import { FormEvent, useState } from 'react'
+import { FormEvent, useEffect, useState } from 'react'
 import { useAuth } from '../context/AuthProvider'
+import { useNavigate } from 'react-router-dom'
 
 export default function AuthPage() {
   const { signIn, signUp, loading, user } = useAuth()
+  const navigate = useNavigate()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [mode, setMode] = useState<'signin'|'signup'>('signin')
   const [submitting, setSubmitting] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
+
+  // If already signed in, go to lobby
+  useEffect(() => {
+    if (!loading && user) navigate('/')
+  }, [loading, user, navigate])
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault()
@@ -17,6 +24,8 @@ export default function AuthPage() {
     try {
       if (mode==='signin') await signIn(email, password)
       else await signUp(email, password)
+      // With email confirmation disabled, session is ready; go to lobby
+      navigate('/')
     } catch (err: any) {
       setErrorMsg(err?.message ?? 'Authentication failed')
     } finally {
