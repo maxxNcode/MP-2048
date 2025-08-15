@@ -15,6 +15,7 @@ create table if not exists public.multiplayer_rooms (
   status text not null default 'waiting',
   board_state jsonb,
   current_turn uuid references public.profiles(id),
+  turn_deadline timestamptz,
   move_history jsonb,
   winner_id uuid references public.profiles(id),
   created_at timestamptz default now(),

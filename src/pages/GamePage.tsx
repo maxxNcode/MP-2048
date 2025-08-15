@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type TouchEventHandler } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthProvider'
 import { supabase } from '../lib/supabaseClient'
 import GameBoard from '../ui/GameBoard'
@@ -20,6 +20,7 @@ function isEmptyBoard(b: number[][] | null | undefined) {
 
 export default function GamePage() {
   const { roomId } = useParams()
+  const navigate = useNavigate()
   const { profile } = useAuth()
   const { addToast } = useToast()
   const [board, setBoard] = useState<number[][]>(createInitialBoard())
@@ -31,12 +32,18 @@ export default function GamePage() {
   const touchStartRef = useRef<{x:number,y:number}|null>(null)
   const isSingle = roomId === 'single'
   const [gameOverOpen, setGameOverOpen] = useState(false)
+  const [confirmQuitOpen, setConfirmQuitOpen] = useState(false)
+  const [mpResultOpen, setMpResultOpen] = useState(false)
+  const [mpOutcome, setMpOutcome] = useState<'win'|'lose'|'draw'>('lose')
   const [finalStats, setFinalStats] = useState<{ score: number; maxTile: number; moves: number; duration: number } | null>(null)
   const [spawn, setSpawn] = useState<{ r: number; c: number } | undefined>(undefined)
   const [muted, setMuted] = useState(false)
   const [dark, setDark] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
   const audioCtxRef = useRef<AudioContext | null>(null)
+  const [turnDeadline, setTurnDeadline] = useState<number | null>(null)
+  const [remainingMs, setRemainingMs] = useState<number>(0)
+  const resigningRef = useRef(false)
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark)
@@ -124,6 +131,65 @@ export default function GamePage() {
     if (!room || !profile) return false
     return room.current_turn === profile.id
   }, [room, profile, isSingle])
+
+  // Start/stop a 20s countdown on your turn in multiplayer
+  useEffect(() => {
+    if (isSingle) { setTurnDeadline(null); setRemainingMs(0); return }
+    if (!myTurn) {
+      setTurnDeadline(null)
+      setRemainingMs(0)
+      return
+    }
+    // Prefer server-provided deadline if available; fallback to local 20s
+    if (room && (room as any).turn_deadline) {
+      const dl = new Date((room as any).turn_deadline).getTime()
+      setTurnDeadline(dl)
+    } else {
+      setTurnDeadline(Date.now() + 20000)
+    }
+  }, [myTurn, isSingle, room])
+
+  // If server updates the deadline, sync it
+  useEffect(() => {
+    if (isSingle) return
+    if (room && (room as any).turn_deadline) {
+      const dl = new Date((room as any).turn_deadline).getTime()
+      setTurnDeadline(dl)
+    }
+  }, [isSingle, room])
+
+  // Multiplayer finish detection -> show result modal and stop timer
+  useEffect(() => {
+    if (isSingle || !room || !profile) return
+    if (room.status === 'finished') {
+      setTurnDeadline(null)
+      setRemainingMs(0)
+      const outcome: 'win'|'lose'|'draw' = room.winner_id
+        ? (room.winner_id === profile.id ? 'win' : 'lose')
+        : 'draw'
+      setMpOutcome(outcome)
+      setMpResultOpen(true)
+    }
+  }, [room, isSingle, profile])
+
+  useEffect(() => {
+    if (!turnDeadline || isSingle) return
+    let raf: number
+    let stopped = false
+    const tick = () => {
+      if (stopped) return
+      const rem = Math.max(0, turnDeadline - Date.now())
+      setRemainingMs(rem)
+      if (rem <= 0) {
+        // Auto-resign if time runs out and we haven't resigned yet
+        void resign(true)
+        return
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => { stopped = true; if (raf) cancelAnimationFrame(raf) }
+  }, [turnDeadline, isSingle])
 
   const move = async (dir: Direction) => {
     if (isSingle) {
@@ -220,18 +286,49 @@ export default function GamePage() {
     startTimeRef.current = Date.now()
   }
 
+  // Determine opponent id for resign logic
+  const opponentId = useMemo(() => {
+    if (!room || !profile) return null as string | null
+    if (room.creator_id === profile.id) return room.joiner_id ?? null
+    if (room.joiner_id === profile.id) return room.creator_id ?? null
+    return null
+  }, [room, profile])
+
+  const resign = async (auto = false) => {
+    if (isSingle || !roomId || !opponentId || resigningRef.current) return
+    resigningRef.current = true
+    try {
+      // Immediately show local lose state and stop timer for better UX
+      setTurnDeadline(null)
+      setRemainingMs(0)
+      setMpOutcome('lose')
+      setMpResultOpen(true)
+      const { error } = await supabase.rpc('finish_game', { p_room_id: roomId, p_winner: opponentId })
+      if (error) {
+        addToast({ type: 'error', title: 'Quit failed', message: error.message })
+      } else if (!auto) {
+        // Already showed modal; no toast needed
+      }
+    } finally {
+      resigningRef.current = false
+    }
+  }
+
   return (
-    <div className="h-full flex flex-col">
-      <div className="flex items-center justify-between mb-2">
+    <div className="flex flex-col">
+      <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">2048</h1>
           <p className="text-sm text-gray-500 dark:text-gray-400">Merge tiles with arrow keys (or WASD) or swipe on mobile.</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
           <button onClick={()=>setDark(d=>!d)} className="px-3 py-1.5 rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-100 dark:border-gray-700 text-sm">{dark? 'Light' : 'Dark'}</button>
           <button onClick={()=>setMuted(m=>!m)} className="px-3 py-1.5 rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-100 dark:border-gray-700 text-sm">{muted? 'Unmute' : 'Mute'}</button>
           {isSingle && (
             <button onClick={newGame} className="px-3 py-1.5 rounded-md bg-gray-900 text-white hover:bg-gray-800 active:scale-[0.98] transition text-sm">New Game</button>
+          )}
+          {!isSingle && (
+            <button onClick={()=>setConfirmQuitOpen(true)} disabled={resigningRef.current} className="px-3 py-1.5 rounded-md border border-red-300 text-red-700 bg-white hover:bg-red-50 dark:bg-gray-800 dark:text-red-300 dark:border-red-700 text-sm">Quit</button>
           )}
         </div>
       </div>
@@ -241,16 +338,30 @@ export default function GamePage() {
           Combine tiles with the same number to add them together. Try to reach 2048! Use Arrow keys / WASD or swipe. Press New Game anytime.
         </div>
       )}
-      <div ref={containerRef} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} className="flex-1 min-h-0 grid md:grid-cols-[1fr,300px] gap-4 items-start overflow-hidden">
-        <div className="min-h-0 overflow-auto">
+      <div ref={containerRef} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} className="grid md:grid-cols-[1fr,300px] gap-4 items-start">
+        <div className="order-1 md:order-none">
           <div className="flex items-center justify-between mb-3">
           <TurnIndicator status={isSingle ? 'your_turn' : myTurn ? 'your_turn' : 'opponent_turn'} />
-          {!isSingle && <RealtimeStatus online={online} />}
+          {!isSingle && (
+            <div className="flex items-center gap-2">
+              {myTurn && (
+                <div className="flex flex-col items-end gap-1 min-w-[52px]">
+                  <span className="inline-flex items-center px-2 py-1 rounded-md text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">
+                    {Math.ceil(remainingMs/1000)}s
+                  </span>
+                  <div className="w-full h-1 rounded bg-amber-200/70 dark:bg-amber-900/30 overflow-hidden">
+                    <div className="h-full bg-amber-500 dark:bg-amber-400 transition-[width] duration-200" style={{ width: `${Math.max(0, Math.min(100, (remainingMs/20000)*100))}%` }} />
+                  </div>
+                </div>
+              )}
+              <RealtimeStatus online={online} />
+            </div>
+          )}
           </div>
           <GameBoard board={board} spawn={spawn} />
           <div className="h-2" />
         </div>
-        <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-white/90 dark:bg-gray-900/80 shadow-lg p-4 space-y-3 min-h-0 overflow-auto">
+        <div className="order-2 md:order-none rounded-xl border border-gray-200 dark:border-gray-800 bg-white/90 dark:bg-gray-900/80 shadow-lg p-4 space-y-3">
           <ScorePanel score={score} moves={moves} maxTile={maxTile} />
           <div className="flex justify-center pt-2">
             <MoveButtons disabled={!canMove} onMove={move} />
@@ -262,10 +373,10 @@ export default function GamePage() {
       <Modal
         open={gameOverOpen}
         title="Game over"
-        onClose={() => setGameOverOpen(false)}
+        onClose={() => navigate('/')}
         actions={
           <>
-            <button onClick={() => setGameOverOpen(false)} className="px-3 py-1.5 rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-700">Close</button>
+            <button onClick={() => navigate('/')} className="px-3 py-1.5 rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-700">Close</button>
             <button onClick={() => { setGameOverOpen(false); newGame() }} className="px-3 py-1.5 rounded-md bg-gray-900 text-white hover:bg-gray-800">Play again</button>
           </>
         }
@@ -291,6 +402,39 @@ export default function GamePage() {
           </div>
         )}
       </Modal>
+
+      {/* Confirm Quit Modal */}
+      <Modal
+        open={confirmQuitOpen}
+        title="Quit match?"
+        onClose={() => setConfirmQuitOpen(false)}
+        actions={
+          <>
+            <button onClick={() => setConfirmQuitOpen(false)} className="px-3 py-1.5 rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-700">Cancel</button>
+            <button onClick={() => { setConfirmQuitOpen(false); void resign(false) }} className="px-3 py-1.5 rounded-md bg-red-600 text-white hover:bg-red-700">Quit</button>
+          </>
+        }
+      >
+        You will forfeit the game and your opponent will be awarded the win.
+      </Modal>
+
+      {/* Multiplayer Result Modal */}
+      {!isSingle && (
+        <Modal
+          open={mpResultOpen}
+          title={mpOutcome === 'win' ? 'You win!' : mpOutcome === 'lose' ? 'You lose' : 'Draw'}
+          onClose={() => navigate('/')}
+          actions={
+            <>
+              <button onClick={() => navigate('/')} className="px-3 py-1.5 rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-700">Close</button>
+            </>
+          }
+        >
+          {mpOutcome === 'win' && 'Great job! Your opponent ran out of time or resigned.'}
+          {mpOutcome === 'lose' && 'Time ran out or you resigned. Better luck next time!'}
+          {mpOutcome === 'draw' && 'This match ended in a draw.'}
+        </Modal>
+      )}
     </div>
   )
 }

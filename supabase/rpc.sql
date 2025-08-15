@@ -143,6 +143,7 @@ begin
     joiner_id = p_user_id,
     status = 'active',
     current_turn = case when random() < 0.5 then creator_id else p_user_id end,
+    turn_deadline = now() + interval '20 seconds',
     board_state = public.create_initial_board(),
     updated_at = now()
   where id = v_room.id;
@@ -178,6 +179,7 @@ begin
   update multiplayer_rooms set
     board_state = v_next,
     current_turn = case when p_user_id = v_room.creator_id then v_room.joiner_id else v_room.creator_id end,
+    turn_deadline = now() + interval '20 seconds',
     move_history = v_hist,
     updated_at = now()
   where id = p_room_id;
